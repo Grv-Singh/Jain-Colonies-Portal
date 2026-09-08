@@ -5,6 +5,9 @@ import { cheeranjiviPlots } from './data/cheeranjiviData';
 import gsInfraCoords from './data/gsInfraCoords.json';
 import cheerCoords from './data/cheeranjiviCoords.json';
 
+const ADMIN_PIN = '2321';
+const MANOJ_JAIN_PHONE = '918619193305';
+
 const COLONIES = {
   GS_INFRA: {
     id: 'GS_INFRA',
@@ -34,16 +37,33 @@ const COLONIES = {
 
 export default function App() {
   const [activeColonyId, setActiveColonyId] = useState('GS_INFRA');
-  const [activeTab, setActiveTab] = useState('map'); // 'map' | 'table'
+  const [activeTab, setActiveTab] = useState('map'); // 'map' | 'split' | 'table'
   const [selectedPlot, setSelectedPlot] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
-  const [ratePerSqYd, setRatePerSqYd] = useState(12000);
-  
+  const [ratePerSqYd, setRatePerSqYd] = useState(11500);
+
+  // Status Overrides (Persistent via localStorage)
+  const [statusOverrides, setStatusOverrides] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('jain_colonies_status_overrides') || '{}');
+    } catch {
+      return {};
+    }
+  });
+
+  // Admin Mode
+  const [isAdmin, setIsAdmin] = useState(() => {
+    return sessionStorage.getItem('jain_admin_auth') === 'true';
+  });
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [adminError, setAdminError] = useState('');
+
   // Pan & Zoom
   const [zoom, setZoom] = useState(0.85);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [pan, setPan] = useState({ x: 20, y: 20 });
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const viewportRef = useRef(null);
@@ -54,6 +74,17 @@ export default function App() {
 
   const colony = COLONIES[activeColonyId];
 
+  // Merge base plot data with persistent status overrides
+  const currentPlots = useMemo(() => {
+    const colonyOverrides = statusOverrides[activeColonyId] || {};
+    return colony.data.map(plot => {
+      if (colonyOverrides[plot.id]) {
+        return { ...plot, status: colonyOverrides[plot.id] };
+      }
+      return plot;
+    });
+  }, [colony, statusOverrides, activeColonyId]);
+
   // Sync rate and coords when switching colonies
   useEffect(() => {
     setRatePerSqYd(colony.defaultRate);
@@ -62,7 +93,6 @@ export default function App() {
     setStatusFilter('ALL');
     setCategoryFilter('ALL');
     setCustomCoords({});
-    // Reset view
     setZoom(activeColonyId === 'GS_INFRA' ? 0.75 : 0.65);
     setPan({ x: 20, y: 20 });
   }, [activeColonyId]);
@@ -74,7 +104,7 @@ export default function App() {
 
   // Filtered Plots
   const filteredPlots = useMemo(() => {
-    return colony.data.filter(plot => {
+    return currentPlots.filter(plot => {
       const matchesSearch = 
         plot.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         plot.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -89,17 +119,81 @@ export default function App() {
 
       return matchesSearch && matchesStatus && matchesCategory;
     });
-  }, [colony, searchQuery, statusFilter, categoryFilter]);
+  }, [currentPlots, searchQuery, statusFilter, categoryFilter]);
 
   // Metrics
   const metrics = useMemo(() => {
-    const totalUnits = colony.data.length;
-    const available = colony.data.filter(p => p.status === 'Available').length;
-    const sold = colony.data.filter(p => p.status === 'Sold').length;
-    const hold = colony.data.filter(p => p.status === 'Hold').length;
-    const totalSqYds = colony.data.reduce((acc, p) => acc + (p.sqYds || 0), 0);
+    const totalUnits = currentPlots.length;
+    const available = currentPlots.filter(p => p.status === 'Available').length;
+    const sold = currentPlots.filter(p => p.status === 'Sold').length;
+    const hold = currentPlots.filter(p => p.status === 'Hold').length;
+    const totalSqYds = currentPlots.reduce((acc, p) => acc + (p.sqYds || 0), 0);
     return { totalUnits, available, sold, hold, totalSqYds: Math.round(totalSqYds) };
-  }, [colony]);
+  }, [currentPlots]);
+
+  // Update plot status (Admin only)
+  const updatePlotStatus = (colonyId, plotId, newStatus) => {
+    if (!isAdmin) {
+      setShowAdminModal(true);
+      return;
+    }
+    const nextOverrides = {
+      ...statusOverrides,
+      [colonyId]: {
+        ...(statusOverrides[colonyId] || {}),
+        [plotId]: newStatus
+      }
+    };
+    setStatusOverrides(nextOverrides);
+    try {
+      localStorage.setItem('jain_colonies_status_overrides', JSON.stringify(nextOverrides));
+    } catch (e) {
+      console.error('Failed to save status overrides', e);
+    }
+    // Update selectedPlot if matching
+    if (selectedPlot?.id === plotId) {
+      setSelectedPlot(prev => prev ? { ...prev, status: newStatus } : prev);
+    }
+  };
+
+  // Focus & highlight plot on drawing
+  const focusPlotOnMap = (plot, switchToMap = true) => {
+    setSelectedPlot(plot);
+    if (switchToMap && activeTab === 'table') {
+      setActiveTab('map');
+    }
+
+    const coord = activeCoords[plot.id];
+    if (coord && viewportRef.current) {
+      const vpW = viewportRef.current.clientWidth || 800;
+      const vpH = viewportRef.current.clientHeight || 600;
+      const targetZoom = 1.15;
+      setZoom(targetZoom);
+      setPan({
+        x: Math.round(vpW / 2 - coord.x * targetZoom),
+        y: Math.round(vpH / 2 - coord.y * targetZoom)
+      });
+    }
+  };
+
+  // Admin PIN verification
+  const handleAdminAuth = (e) => {
+    e.preventDefault();
+    if (pinInput.trim() === ADMIN_PIN) {
+      setIsAdmin(true);
+      sessionStorage.setItem('jain_admin_auth', 'true');
+      setShowAdminModal(false);
+      setPinInput('');
+      setAdminError('');
+    } else {
+      setAdminError('Invalid PIN! Please enter 2321');
+    }
+  };
+
+  const handleAdminLogout = () => {
+    setIsAdmin(false);
+    sessionStorage.removeItem('jain_admin_auth');
+  };
 
   // Map drag handlers
   const handleMouseDown = (e) => {
@@ -152,14 +246,14 @@ export default function App() {
   const sharePlotOnWhatsApp = (plot) => {
     const totalVal = Math.round((plot.sqYds || 0) * ratePerSqYd);
     const msg = encodeURIComponent(
-      `Hello, I am interested in ${colony.name} - ${plot.name} (${plot.category}).\n` +
+      `Hello Manoj ji, I am interested in ${colony.name} - ${plot.name} (${plot.category}).\n` +
       `Area: ${plot.sqYds} Sq. Yds (${plot.sqMtr} Sq. Mtr)\n` +
       `Status: ${plot.status}\n` +
       `Road Width: ${plot.road || 'Standard'}\n` +
       `Est. Value: ${formatCurrency(totalVal)}\n` +
       `Please share brochure and site visit details.`
     );
-    window.open(`https://wa.me/?text=${msg}`, '_blank');
+    window.open(`https://wa.me/${MANOJ_JAIN_PHONE}?text=${msg}`, '_blank');
   };
 
   return (
@@ -194,6 +288,27 @@ export default function App() {
 
         {/* Header Actions */}
         <div className="header-actions">
+          {isAdmin ? (
+            <div className="admin-status-indicator">
+              <span className="admin-badge-pill">🔓 Admin Mode</span>
+              <button 
+                className="action-btn logout-btn" 
+                onClick={handleAdminLogout}
+                title="Logout from Admin Mode"
+              >
+                Logout
+              </button>
+            </div>
+          ) : (
+            <button 
+              className="action-btn admin-login-btn"
+              onClick={() => { setShowAdminModal(true); setAdminError(''); setPinInput(''); }}
+              title="Admin Login to change plot statuses"
+            >
+              🔒 Admin Login
+            </button>
+          )}
+
           <button 
             className={`action-btn ${mappingMode ? 'active-mode' : ''}`}
             onClick={() => setMappingMode(!mappingMode)}
@@ -211,6 +326,27 @@ export default function App() {
           </a>
         </div>
       </header>
+
+      {/* Admin Mode Alert Banner */}
+      {isAdmin && (
+        <div className="admin-banner">
+          <span>
+            🔑 <strong>Admin Mode Active (PIN: 2321):</strong> You have edit privileges to toggle plot statuses (Available / Hold / Sold). Changes persist locally.
+          </span>
+          <button 
+            className="action-btn"
+            style={{ padding: '2px 8px', fontSize: '0.75rem', borderColor: '#f59e0b', color: '#f59e0b' }}
+            onClick={() => {
+              if (confirm('Reset all status overrides back to default sheet?')) {
+                localStorage.removeItem('jain_colonies_status_overrides');
+                setStatusOverrides({});
+              }
+            }}
+          >
+            Reset Overrides
+          </button>
+        </div>
+      )}
 
       {/* Mapping mode banner */}
       {mappingMode && (
@@ -244,34 +380,34 @@ export default function App() {
             📜 <strong>RERA / Plan:</strong> {colony.rera}
           </span>
           <span className="meta-pill">
-            🛣️ <strong>Roads:</strong> 30 ft, 40 ft & Main Highways
+            📞 <strong>Contact:</strong> Manoj Jain (<a href={`tel:${MANOJ_JAIN_PHONE}`} style={{ color: 'inherit', textDecoration: 'none' }}>8619193305</a>)
           </span>
         </div>
         <div className="meta-pill" style={{ borderColor: '#3b82f6' }}>
-          🏷️ Base Rate: <strong>₹{ratePerSqYd.toLocaleString('en-IN')} / Sq.Yd</strong>
+          💡 <strong>Tip:</strong> Click any plot in the table or cards to locate & highlight on the map drawing!
         </div>
       </div>
 
-      {/* Summary Metrics */}
-      <div className="metrics-row">
+      {/* Metrics Row */}
+      <div className="metrics-bar">
         <div className="metric-card">
-          <span className="metric-label">Total Inventory</span>
+          <span className="metric-label">Total Units</span>
           <span className="metric-value">{metrics.totalUnits}</span>
-          <span className="metric-sub">{colony.id === 'GS_INFRA' ? '64 Plots + 24 Shops' : 'Residential Plots'}</span>
+          <span className="metric-sub">{colony.name}</span>
         </div>
-        <div className="metric-card" style={{ borderLeft: '4px solid var(--color-available)' }}>
-          <span className="metric-label">Available Plots</span>
-          <span className="metric-value" style={{ color: 'var(--color-available)' }}>{metrics.available}</span>
-          <span className="metric-sub">Open for booking</span>
+        <div className="metric-card available">
+          <span className="metric-label">Available</span>
+          <span className="metric-value">{metrics.available}</span>
+          <span className="metric-sub">Ready for Booking</span>
         </div>
-        <div className="metric-card" style={{ borderLeft: '4px solid var(--color-sold)' }}>
-          <span className="metric-label">Sold Units</span>
-          <span className="metric-value" style={{ color: 'var(--color-sold)' }}>{metrics.sold}</span>
-          <span className="metric-sub">Confirmed registry</span>
+        <div className="metric-card sold">
+          <span className="metric-label">Sold</span>
+          <span className="metric-value">{metrics.sold}</span>
+          <span className="metric-sub">Confirmed Registry</span>
         </div>
-        <div className="metric-card" style={{ borderLeft: '4px solid var(--color-hold)' }}>
-          <span className="metric-label">Hold / Reserved</span>
-          <span className="metric-value" style={{ color: 'var(--color-hold)' }}>{metrics.hold}</span>
+        <div className="metric-card hold">
+          <span className="metric-label">Hold / Token</span>
+          <span className="metric-value">{metrics.hold}</span>
           <span className="metric-sub">In token process</span>
         </div>
         <div className="metric-card">
@@ -281,12 +417,12 @@ export default function App() {
         </div>
       </div>
 
-      {/* Controls & Search Toolbar */}
+      {/* Controls & Filter Bar */}
       <div className="controls-bar">
         <div className="search-box">
           <span className="search-icon">🔍</span>
           <input 
-            type="text"
+            type="text" 
             className="search-input"
             placeholder="Search Plot/Shop (e.g. 15, S-04, 200)..."
             value={searchQuery}
@@ -294,27 +430,24 @@ export default function App() {
           />
         </div>
 
-        {/* Filters */}
         <div className="filter-group">
-          {['ALL', 'AVAILABLE', 'SOLD', 'HOLD'].map(s => (
+          {['ALL', 'AVAILABLE', 'SOLD', 'HOLD'].map(st => (
             <button 
-              key={s}
-              className={`filter-chip ${statusFilter === s ? 'active' : ''}`}
-              onClick={() => setStatusFilter(s)}
+              key={st}
+              className={`filter-chip ${statusFilter === st ? 'active' : ''}`}
+              onClick={() => setStatusFilter(st)}
             >
-              {s === 'ALL' ? 'All Status' : s}
+              {st === 'ALL' ? 'All Status' : st}
             </button>
           ))}
-
           <div style={{ width: 1, height: 24, background: 'var(--border-color)', margin: '0 4px' }} />
-
-          {['ALL', 'Residential', 'Commercial', 'Corner'].map(c => (
+          {['ALL', 'Residential', 'Commercial', 'Corner'].map(cat => (
             <button 
-              key={c}
-              className={`filter-chip ${categoryFilter === c ? 'active' : ''}`}
-              onClick={() => setCategoryFilter(c)}
+              key={cat}
+              className={`filter-chip ${categoryFilter === cat ? 'active' : ''}`}
+              onClick={() => setCategoryFilter(cat)}
             >
-              {c}
+              {cat}
             </button>
           ))}
         </div>
@@ -328,6 +461,12 @@ export default function App() {
             🗺️ Map View
           </button>
           <button 
+            className={`view-toggle-btn ${activeTab === 'split' ? 'active' : ''}`}
+            onClick={() => setActiveTab('split')}
+          >
+            ⚡ Split View
+          </button>
+          <button 
             className={`view-toggle-btn ${activeTab === 'table' ? 'active' : ''}`}
             onClick={() => setActiveTab('table')}
           >
@@ -336,9 +475,35 @@ export default function App() {
         </div>
       </div>
 
+      {/* Horizontal Plot Selector Strip (Easy Tabular Cards) */}
+      <div className="plot-cards-strip">
+        <div className="strip-header">
+          <span>⚡ <strong>Quick Plot Selector:</strong> Click any plot to highlight on drawing</span>
+          <span className="strip-count">{filteredPlots.length} Plots</span>
+        </div>
+        <div className="strip-scroll">
+          {filteredPlots.map(p => {
+            const isSel = selectedPlot?.id === p.id;
+            return (
+              <div 
+                key={p.id}
+                className={`strip-card ${isSel ? 'selected' : ''} ${p.status.toLowerCase()}`}
+                onClick={() => focusPlotOnMap(p, false)}
+              >
+                <div className="strip-card-top">
+                  <span className="strip-plot-no">{p.plotNo}</span>
+                  <span className={`strip-dot ${p.status.toLowerCase()}`} />
+                </div>
+                <div className="strip-plot-size">{p.sqYds} Yd</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Main Content Area */}
-      <main className="main-content">
-        {activeTab === 'map' ? (
+      <main className={`main-content ${activeTab === 'split' ? 'split-view' : ''}`}>
+        {(activeTab === 'map' || activeTab === 'split') && (
           <div className="map-panel">
             {/* Zoom Controls */}
             <div className="map-controls">
@@ -368,7 +533,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* Interactive Viewport */}
+            {/* Viewport */}
             <div 
               className={`map-viewport ${mappingMode ? 'mapping-cursor' : ''}`}
               ref={viewportRef}
@@ -387,58 +552,71 @@ export default function App() {
                 }}
                 onClick={handleMapClick}
               >
-                {/* Blueprint Background */}
+                {/* Blueprint Drawing Base Image */}
                 <img 
                   src={colony.mapImage} 
                   alt={colony.name} 
                   className="map-base-img"
-                  style={{ width: colony.originalSize.width, height: colony.originalSize.height }}
+                  style={{
+                    width: colony.originalSize.width,
+                    height: colony.originalSize.height
+                  }}
                 />
 
-                {/* SVG Overlay with Pins */}
+                {/* SVG Overlay for Coordinates & Highlights */}
                 <svg 
-                  className="map-svg-overlay" 
+                  className="map-svg-overlay"
                   viewBox={`0 0 ${colony.originalSize.width} ${colony.originalSize.height}`}
                 >
                   {colony.data.map(plot => {
-                    const pos = activeCoords[plot.id];
-                    if (!pos) return null;
+                    const coord = activeCoords[plot.id];
+                    if (!coord) return null;
 
-                    const isMatch = filteredPlots.some(p => p.id === plot.id);
-                    const isSelected = selectedPlot?.id === plot.id;
+                    // Check if current plot is filtered out
+                    const isVisible = filteredPlots.some(p => p.id === plot.id);
+                    const isSel = selectedPlot?.id === plot.id;
+                    
+                    // Status colors
+                    let fillColor = '#10b981'; // Available
+                    if (plot.category === 'Commercial') {
+                      fillColor = '#8b5cf6';
+                    } else if (plot.status === 'Sold') {
+                      fillColor = '#ef4444';
+                    } else if (plot.status === 'Hold') {
+                      fillColor = '#f59e0b';
+                    }
 
-                    let pinColor = '#10b981'; // available
-                    if (plot.category === 'Commercial') pinColor = '#8b5cf6';
-                    else if (plot.status === 'Sold') pinColor = '#ef4444';
-                    else if (plot.status === 'Hold') pinColor = '#f59e0b';
-
-                    const opacity = isMatch ? 1 : 0.2;
+                    const opacity = isVisible ? 1 : 0.25;
 
                     return (
                       <g 
-                        key={plot.id} 
-                        transform={`translate(${pos.x}, ${pos.y})`}
-                        className={`plot-badge ${isSelected ? 'selected' : ''}`}
+                        key={plot.id}
+                        transform={`translate(${coord.x}, ${coord.y})`}
+                        className={`plot-badge ${isSel ? 'selected' : ''}`}
                         onClick={(e) => {
                           e.stopPropagation();
-                          setSelectedPlot(plot);
+                          focusPlotOnMap(plot, false);
                         }}
                         opacity={opacity}
                       >
-                        {/* Outer Glow on select */}
-                        {isSelected && (
-                          <circle r="22" fill="none" stroke="#3b82f6" strokeWidth="3" opacity="0.8" />
+                        {/* Highlighting reticle / radar pulse when selected */}
+                        {isSel && (
+                          <g className="highlight-reticle">
+                            <circle r="46" className="radar-wave" fill="rgba(59, 130, 246, 0.25)" stroke="#38bdf8" strokeWidth="2.5" />
+                            <circle r="32" className="radar-wave-delayed" fill="none" stroke="#fbbf24" strokeWidth="2.5" strokeDasharray="5 3" />
+                            <circle r="20" fill="none" stroke="#3b82f6" strokeWidth="3" opacity="0.9" />
+                          </g>
                         )}
 
-                        {/* Pin Background */}
+                        {/* Outer Pin Circle */}
                         <circle 
                           r="16" 
-                          fill={pinColor} 
+                          fill={fillColor} 
                           stroke="#ffffff" 
-                          strokeWidth="2"
+                          strokeWidth="2" 
                         />
-
-                        {/* Label */}
+                        
+                        {/* Text Label */}
                         <text 
                           textAnchor="middle" 
                           dy="4.5" 
@@ -482,9 +660,15 @@ export default function App() {
               )}
             </div>
           </div>
-        ) : (
-          /* Table View */
+        )}
+
+        {(activeTab === 'table' || activeTab === 'split') && (
           <div className="table-container">
+            <div className="table-top-bar">
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                Showing <strong>{filteredPlots.length}</strong> units • Click any row to highlight on drawing
+              </span>
+            </div>
             <table className="plots-table">
               <thead>
                 <tr>
@@ -507,7 +691,7 @@ export default function App() {
                     <tr 
                       key={p.id} 
                       className={isSel ? 'selected' : ''}
-                      onClick={() => setSelectedPlot(p)}
+                      onClick={() => focusPlotOnMap(p, activeTab === 'table')}
                     >
                       <td><strong>{p.name}</strong></td>
                       <td>{p.category}</td>
@@ -516,22 +700,52 @@ export default function App() {
                       <td>{p.sqMtr} Sq.M</td>
                       <td>{p.road || '30 ft'}</td>
                       <td>
-                        <span className={`status-tag ${p.status.toLowerCase()}`}>
-                          {p.status}
-                        </span>
+                        {isAdmin ? (
+                          <select 
+                            className={`status-select ${p.status.toLowerCase()}`}
+                            value={p.status}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              updatePlotStatus(colony.id, p.id, e.target.value);
+                            }}
+                          >
+                            <option value="Available">Available</option>
+                            <option value="Hold">Hold</option>
+                            <option value="Sold">Sold</option>
+                          </select>
+                        ) : (
+                          <span className={`status-tag ${p.status.toLowerCase()}`}>
+                            {p.status}
+                          </span>
+                        )}
                       </td>
                       <td><strong>{formatCurrency(estVal)}</strong></td>
                       <td>
-                        <button 
-                          className="action-btn"
-                          style={{ padding: '4px 10px', fontSize: '0.75rem' }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            sharePlotOnWhatsApp(p);
-                          }}
-                        >
-                          💬 Inquire
-                        </button>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <button 
+                            className="action-btn"
+                            style={{ padding: '4px 8px', fontSize: '0.75rem' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              focusPlotOnMap(p, true);
+                            }}
+                            title="Highlight on map drawing"
+                          >
+                            🗺️ Map
+                          </button>
+                          <button 
+                            className="action-btn"
+                            style={{ padding: '4px 8px', fontSize: '0.75rem', background: '#10b981', color: '#fff', border: 'none' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              sharePlotOnWhatsApp(p);
+                            }}
+                            title="Inquire on WhatsApp"
+                          >
+                            💬
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -554,6 +768,33 @@ export default function App() {
                   {selectedPlot.status}
                 </span>
               </div>
+
+              {/* Admin Status Changer */}
+              {isAdmin ? (
+                <div className="admin-status-box">
+                  <div className="admin-status-title">
+                    <span>⚡ Admin: Change Status</span>
+                  </div>
+                  <div className="status-btn-group">
+                    {['Available', 'Hold', 'Sold'].map(st => (
+                      <button
+                        key={st}
+                        className={`status-btn-pill ${st.toLowerCase()} ${selectedPlot.status === st ? 'active' : ''}`}
+                        onClick={() => updatePlotStatus(colony.id, selectedPlot.id, st)}
+                      >
+                        {st}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <button 
+                  className="admin-unlock-hint"
+                  onClick={() => { setShowAdminModal(true); setPinInput(''); setAdminError(''); }}
+                >
+                  🔒 Edit Plot Status (Admin PIN Required)
+                </button>
+              )}
 
               {/* Quick Info Grid */}
               <div className="info-grid">
@@ -601,7 +842,15 @@ export default function App() {
                 className="whatsapp-btn"
                 onClick={() => sharePlotOnWhatsApp(selectedPlot)}
               >
-                💬 Inquire on WhatsApp
+                💬 Inquire on WhatsApp (Manoj Jain)
+              </button>
+
+              <button 
+                className="action-btn"
+                style={{ justifyContent: 'center' }}
+                onClick={() => focusPlotOnMap(selectedPlot, true)}
+              >
+                🎯 Re-center on Map Drawing
               </button>
 
               <button 
@@ -621,11 +870,61 @@ export default function App() {
             <div style={{ textAlign: 'center', margin: 'auto', color: 'var(--text-muted)' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🎯</div>
               <h4 style={{ color: 'var(--text-primary)', marginBottom: '0.25rem' }}>Select a Plot</h4>
-              <p style={{ fontSize: '0.85rem' }}>Click any plot pin on the blueprint or select from the list view to see full dimensions, pricing, and WhatsApp inquiry options.</p>
+              <p style={{ fontSize: '0.85rem' }}>Click any plot pin on the blueprint or select from the list/quick-selector to see full dimensions, pricing, and highlight on drawing.</p>
             </div>
           )}
         </aside>
       </main>
+
+      {/* Admin Login PIN Modal */}
+      {showAdminModal && (
+        <div className="modal-backdrop" onClick={() => setShowAdminModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>🔒 Admin Access</h3>
+              <button 
+                className="modal-close-btn"
+                onClick={() => setShowAdminModal(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <p className="modal-desc">
+              Enter Admin Security PIN to enable status editing for plots:
+            </p>
+            <form onSubmit={handleAdminAuth}>
+              <input 
+                type="password"
+                className="pin-modal-input"
+                placeholder="Enter 4-digit PIN"
+                value={pinInput}
+                onChange={(e) => {
+                  setPinInput(e.target.value);
+                  setAdminError('');
+                }}
+                autoFocus
+                maxLength={8}
+              />
+              {adminError && <div className="pin-error-msg">{adminError}</div>}
+              <div className="modal-actions">
+                <button 
+                  type="button" 
+                  className="action-btn"
+                  onClick={() => setShowAdminModal(false)}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  className="action-btn submit-pin-btn"
+                >
+                  Unlock Admin Mode
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
