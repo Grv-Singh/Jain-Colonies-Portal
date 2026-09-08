@@ -1100,3 +1100,29 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Missing utility classes */
+.brand-text h1 {
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+.brand-text p {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.details-title h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0 0 0.15rem;
+}
+.details-title span {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.table-top-bar {
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-primary);
+}

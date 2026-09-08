@@ -411,7 +411,7 @@ export default function App() {
       </div>
 
       {/* Metrics Row */}
-      <div className="metrics-bar">
+      <div className="metrics-row">
         <div className="metric-card">
           <span className="metric-label">Total Units</span>
           <span className="metric-value">{metrics.totalUnits}</span>
