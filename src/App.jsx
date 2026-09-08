@@ -19,7 +19,17 @@ const COLONIES = {
     data: gsInfraPlots,
     coords: gsInfraCoords,
     defaultRate: 11500,
-    locationLink: 'https://maps.google.com/?q=Kishangarh+Arain+Road'
+    locationLink: 'https://maps.google.com/?q=Kishangarh+Arain+Road',
+    gallery: [
+      { src: './gs_map_master.webp', caption: 'GS Infra City – Master Layout' },
+      { src: './gs_area_1.webp',    caption: 'Area Sheet (Residential Plots 1–48)' },
+      { src: './gs_area_2.webp',    caption: 'Area Sheet (Residential Plots 49+)' },
+      { src: './gs_area_3.webp',    caption: 'Commercial Shops Area Sheet' },
+    ],
+    brochures: [
+      { label: '📐 Layout Plan (PDF)', file: './gs_infra_layout.pdf' },
+      { label: '📊 Area Sheet (PDF)',  file: './gs_infra_area_sheet.pdf' },
+    ]
   },
   CHEERANJIVI: {
     id: 'CHEERANJIVI',
@@ -28,7 +38,19 @@ const COLONIES = {
     rera: 'RAJ/P/2026/5332',
     mapImage: './cheeranjivi_map.webp',
     originalSize: { width: 2554, height: 1078 },
+    gallery: [
+      { src: './cheer_site_1.webp', caption: 'Cheeranjivi Vatika – Site View 1' },
+      { src: './cheer_site_2.webp', caption: 'Site View 2' },
+      { src: './cheer_site_3.webp', caption: 'Site View 3' },
+      { src: './cheer_site_4.webp', caption: 'Site View 4' },
+      { src: './cheer_site_5.webp', caption: 'Site View 5' },
+      { src: './cheer_site_6.webp', caption: 'RERA Layout Overview' },
+    ],
+    brochures: [
+      { label: '📐 Layout Plan (PDF)', file: './cheeranjivi_layout.pdf' },
+    ],
     data: cheeranjiviPlots,
+
     coords: cheerCoords,
     defaultRate: 14500,
     locationLink: 'https://rera.rajasthan.gov.in/'
@@ -925,6 +947,48 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Gallery & Brochures Section */}
+      <section className="gallery-section">
+        <div className="gallery-header">
+          <h2 className="gallery-title">📸 Photos &amp; Brochures — {colony.name}</h2>
+          <div className="brochure-btns">
+            {colony.brochures && colony.brochures.map((b, i) => (
+              <a
+                key={i}
+                href={b.file}
+                download
+                className="brochure-btn"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {b.label}
+              </a>
+            ))}
+          </div>
+        </div>
+
+        <div className="gallery-grid">
+          {colony.gallery && colony.gallery.map((img, i) => (
+            <div
+              key={i}
+              className="gallery-card"
+              onClick={() => window.open(img.src, '_blank')}
+              title={img.caption}
+            >
+              <img
+                src={img.src}
+                alt={img.caption}
+                className="gallery-img"
+                loading="lazy"
+              />
+              <div className="gallery-caption">{img.caption}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
     </div>
+
   );
 }
